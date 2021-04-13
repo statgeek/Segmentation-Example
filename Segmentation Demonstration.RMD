@@ -1,0 +1,184 @@
+---
+title: "Segmentation Example"
+author: "Fareeza Khurshed"
+date: "4/13/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=TRUE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(factoextra)
+library(standardize)
+library(fmsb)
+
+
+#read in all raw data
+rawData <- read_csv("https://raw.githubusercontent.com/statgeek/data/master/census%20FSA.csv")
+
+#code for graph later - included her for simplicity
+create_beautiful_radarchart <- function(data, color = "#00AFBB", 
+                                        vlabels = colnames(data), vlcex = 0.7,
+                                        caxislabels = NULL, title = NULL, ...){
+  radarchart(
+    data, axistype = 1,
+    # Customize the polygon
+    pcol = color, pfcol = scales::alpha(color, 0.5), plwd = 2, plty = 1,
+    # Customize the grid
+    cglcol = "grey", cglty = 1, cglwd = 0.8,
+    # Customize the axis
+    axislabcol = "grey", 
+    # Variable labels
+    vlcex = vlcex, vlabels = vlabels,
+    caxislabels = caxislabels, title = title, ...
+  )
+}
+
+
+```
+
+## Segmentation Examples
+
+Examine the data and then do some data cleaning. 
+
+* Removes redundant variables from a contextually basis
+* Filters data to Alberta to ensure relevance
+* Ensure that no data is missing
+
+This data is Census 2016 data
+
+
+```{r summary}
+
+
+#remove columns that will not be used for modeling
+dataP1 <- rawData %>%
+  select(-c(year, geo_code, geo_level, GNR, GNR_LF, data_quality_flag, alt_geo_code,
+            pct_age_0_14, pct_unemployed, pct_cdn_citizens, pct_immigrants, avg_census_family_size,
+            median_income_recipients, pct_participation_rate, pct_home_owners, pct_education_none,
+            num_dwellings_occupied ), 
+         -starts_with("pct_age_"),
+         -starts_with("pct_LIM_AT_")
+  ) %>%
+  filter(substr(FSA, 1, 1) == "T") %>%
+  column_to_rownames(var="FSA")
+
+#remove all columns where missing values and convert to data frame
+dataP2 <- dataP1 %>% filter(complete.cases(.))
+
+summary(dataP2)
+```
+
+## K Means Model
+
+Trying it out without further processing:
+
+```{r attempt1, echo=FALSE}
+demo <- kmeans(dataP2, 3)
+
+fviz_cluster(demo, data = dataP2,
+             palette = c("#00AFBB","#2E9FDF", "#E7B800"),
+             ggtheme = theme_minimal(),
+             main = "Partitioning Clustering Plot"
+)
+
+```
+
+## Standardization!
+
+* Standardize variables and repeat
+
+```{r}
+dataP3 <- as_tibble(scale(dataP2))
+
+demo2 <- kmeans(dataP3, 3)
+
+fviz_cluster(demo2, data = dataP3,
+             palette = c("#00AFBB","#2E9FDF", "#E7B800"),
+             ggtheme = theme_minimal(),
+             main = "Partitioning Clustering Plot"
+)
+```
+## Hierarchical Modeling
+
+```{r}
+# Compute hierarchical clustering and cut into 3 clusters
+ha1_model <- hcut(dataP3, k = 3, stand = TRUE)
+
+# Visualize
+fviz_dend(ha1_model, rect = TRUE, cex = 0.5,
+          k_colors = c("#00AFBB","#2E9FDF", "#E7B800"))
+```
+## Results comparison
+
+```{r}
+#add cluster to data
+dataP4 <- dataP3
+dataP4$cluster_kmeans <- demo2$cluster
+dataP4$cluster_hier <- ha1_model$cluster
+
+table(dataP4$cluster_kmeans, dataP4$cluster_hier)
+```
+
+## Optimal Number of clusters?
+
+```{r}
+#optimal number of clusters
+
+fviz_nbclust(dataP3, kmeans, method = "silhouette")
+```
+## Now what?
+
+* Visual your data
+
+```{r}
+
+#source: https://www.datanovia.com/en/blog/beautiful-radar-chart-in-r-using-fmsb-and-ggplot-packages/
+
+#visualize using a radar chart
+df_scaled <- dataP3
+
+# Variables summary
+# Get the minimum and the max of every column  
+col_max <- apply(df_scaled, 2, max)
+col_min <- apply(df_scaled, 2, min)
+# Calculate the average profile 
+col_mean <- apply(df_scaled, 2, mean)
+
+#cluster1
+
+summary<-dataP4 %>% 
+  group_by(cluster_kmeans) %>%
+  summarise(across(pop_2016:pct_non_movers, ~ mean(.x, na.rm = TRUE))) %>%
+  select(-cluster_kmeans)
+
+# Put together the summary of columns
+col_summary <- t(data.frame(Max = col_max, Min = col_min, Average = col_mean))
+
+
+# Bind variables summary to the data
+df_scaled2 <- as.data.frame(rbind(col_summary, summary))
+
+
+# Define colors and titles
+colors <- c("#00AFBB", "#E7B800", "#FC4E07")
+titles <- c("Cluster 1", "Cluster 2", "Cluster 3")
+
+# Reduce plot margin using par()
+# Split the screen in 3 parts
+op <- par(mar = c(1, 1, 1, 1))
+par(mfrow = c(1,3))
+
+# Create the radar chart
+for(i in 1:3){
+  create_beautiful_radarchart(
+    data = df_scaled2[c(1, 2, i+2), ],
+    color = colors[i], title = titles[i]
+  )
+}
+par(op)
+
+```
+
